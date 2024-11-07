@@ -1,0 +1,126 @@
+# Proyecto: Pantalla LCD con Transformada Rápida de Fourier (FFT) y Modo de Suspensión
+
+Este proyecto utiliza una pantalla LCD para mostrar la Transformada Rápida de Fourier (FFT) de una señal de entrada. Se implementó un botón que permite poner el sistema en modo de suspensión (Sleep Mode) para ahorrar energía.
+
+## Funcionalidades
+
+1. **Transformada Rápida de Fourier (FFT):**
+   - La pantalla LCD despliega la FFT de una señal de entrada, mostrando la frecuencia de la señal en tiempo real.
+   - La FFT permite visualizar la frecuencia dominante y otros componentes de frecuencia de la señal.
+
+2. **Modo de Suspensión (Sleep Mode):**
+   - Un botón físico está configurado para activar el modo de suspensión del dispositivo.
+   - Al presionar el botón, la pantalla y otros componentes se apagan, entrando en un estado de bajo consumo energético.
+   - Este modo permite que el sistema permanezca en un estado de espera hasta que se reactive manualmente o mediante un evento de interrupción.
+
+## Cómo funciona el modo de suspensión
+
+El modo de suspensión se activa mediante el botón conectado al microcontrolador. Al activarse, se ejecuta una rutina que:
+- Apaga la pantalla LCD.
+- Reduce el consumo de energía del microcontrolador.
+- Reactiva el sistema al recibir una interrupción (como al presionar de nuevo el botón).
+
+## Codigo Utilizado
+
+#include <LiquidCrystal.h>
+#include "Adafruit_ZeroFFT.h"
+
+// Configuration for the LCD
+LiquidCrystal lcd(12, 14, 27, 26, 25, 33);  // Pins for the LCD
+
+// FFT configuration
+#define DATA_SIZE 256  // This must be a power of 2 and between 16 and 2048 inclusive
+#define FS 8000        // Sample rate (Hz)
+
+volatile unsigned long pulseCount = 0;  // Pulse count
+unsigned long previousMillis = 0;        // Previous time for measuring frequency
+int16_t fftInput[DATA_SIZE];              // Array to hold the samples for FFT (change to int16_t)
+
+// Button configuration
+const int buttonPin = 35;  // Pin for the button
+volatile bool sleepMode = false;  // State of sleep mode
+
+// Interrupt to count pulses
+void IRAM_ATTR countPulse() {
+  pulseCount++;
+}
+
+// Interrupt to toggle sleep mode
+void IRAM_ATTR toggleSleepMode() {
+  sleepMode = !sleepMode;  // Toggle sleep mode state
+}
+
+void setup() {
+  lcd.begin(16, 2); // Initialize the LCD
+  lcd.print("Frequency:");
+
+  pinMode(34, INPUT);  // Set the pin for pulse input
+  attachInterrupt(digitalPinToInterrupt(34), countPulse, RISING);  // Interrupt on rising edge
+
+  pinMode(buttonPin, INPUT_PULLUP);  // Set button pin as input with pull-up
+  attachInterrupt(digitalPinToInterrupt(buttonPin), toggleSleepMode, FALLING);  // Interrupt on falling edge
+
+  Serial.begin(9600); // Start serial communication for debugging
+}
+
+void loop() {
+  if (sleepMode) {
+    // If in sleep mode, turn off the display and enter low power mode
+    lcd.noDisplay();  // Turn off the LCD
+    delay(1000);  // Wait a second before going to sleep
+    return;  // Exit loop to "sleep"
+  } else {
+    lcd.display();  // Ensure the LCD is on
+
+    unsigned long currentMillis = millis();
+
+    // Measure frequency every second (1000 ms)
+    if (currentMillis - previousMillis >= 1000) {
+      previousMillis = currentMillis;
+
+      // Read the pulse count
+      noInterrupts(); // Temporarily disable interrupts
+      unsigned long frequency = pulseCount;  // Calculate frequency (pulses per second)
+      pulseCount = 0;  // Reset pulse count
+      interrupts();  // Re-enable interrupts
+
+      // Show frequency on the LCD
+      lcd.setCursor(0, 1);  // Move cursor to the second line
+      lcd.print(frequency);
+      lcd.print(" Hz     ");  // Overwrite any previous value
+
+      // Debugging information
+      Serial.print("Pulse Count: ");
+      Serial.println(frequency);
+
+      // Sample the analog signal
+      for (int i = 0; i < DATA_SIZE; i++) {
+        fftInput[i] = analogRead(A0);  // Read from analog pin A0
+        delayMicroseconds(125);         // Adjust delay for your sample rate
+      }
+
+      // Prepare signal for FFT calculation
+      ZeroFFT(fftInput, DATA_SIZE);  // Perform the FFT on the signal
+
+      // Find the frequency bin with the highest magnitude
+      float maxMagnitude = 0;
+      int maxIndex = 0;
+
+      for (int i = 0; i < DATA_SIZE / 2; i++) {
+        float magnitude = sqrt(fftInput[i] * fftInput[i] + fftInput[i + DATA_SIZE / 2] * fftInput[i + DATA_SIZE / 2]);
+        if (magnitude > maxMagnitude) {
+          maxMagnitude = magnitude;
+          maxIndex = i;
+        }
+      }
+
+      // Calculate the frequency of the maximum magnitude
+      float frequencyFromFFT = (maxIndex * FS) / DATA_SIZE;
+
+      // Print frequency and corresponding FFT output to Serial
+      Serial.print("Frequency (FFT): ");
+      Serial.print(frequencyFromFFT);
+      Serial.println(" Hz");
+    }
+  }
+}
